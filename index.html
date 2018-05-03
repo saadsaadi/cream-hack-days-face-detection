@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Emotion Detecting Ad</title>
+
+  <link rel="stylesheet" href="./style.css">
+
+  <script src="js/p5.min.js" type="text/javascript"></script>
+  <script src="js/p5.dom.min.js" type="text/javascript"></script>
+  <script src="js/p5.sound.js" type="text/javascript"></script>
+
+  <script src="js/jquery.min.js"></script>
+  <script src="js/canvas-to-blob.min.js"></script>
+
+  <script src="js/Chart.bundle.min.js"></script>
+  <script src="js/Chart.min.js"></script>
+
+  <script src="data-visualization.js"></script>
+
+  <script>
+    var api_key = "AIzaSyBkK0bqi2wL85C3l7IT58SvOqyNBMgl3Wo";
+    var api_url = "https://vision.googleapis.com/v1/images:annotate?key=" + api_key
+
+    var timeUnitsToRun = 30;
+    var isLive = location.search != "?test";
+
+    var capture;
+    var w = 640, h = 480;
+    var i = 0;
+
+    var captureCanvas;
+    var snapshotPhotoCanvas;
+
+    function setup() {
+      capture = createCapture(VIDEO);
+      createCanvas(w, h);
+      capture.size(w, h);
+      capture.hide();
+
+      captureCanvas = document.getElementById("defaultCanvas0").getContext('2d');
+      snapshotPhotoCanvas = document.getElementById("snapshot-photo").getContext('2d');
+
+      if (isLive) {
+        setInterval(mousePressed, 1000);
+      }
+    }
+
+    function blobToBase64(blob, cb) {
+      var reader = new window.FileReader();
+      reader.readAsDataURL(blob);
+      reader.onloadend = function() {
+        cb(reader.result);
+      }
+    }
+
+    function canvasToBase64(canvas, cb) {
+      canvas.toBlob(function(blob) {
+        blobToBase64(blob, cb);
+      }, 'image/jpeg');
+    }
+
+    function upload() {
+      canvasToBase64(canvas, function(b64) {
+        b64 = b64.replace('data:image/jpeg;base64,', ''); // remove content type
+        var request = {
+          "requests":[
+            {
+              "image":{ "content": b64 },
+              "features":[
+                {
+                  // if you want to detect more faces, or detect something else, change this
+                  "type":"FACE_DETECTION",
+                  "maxResults":1
+                }
+              ]
+            }
+          ]
+        };
+
+        $.ajax({
+          method: 'POST',
+          url: api_url,
+          contentType: 'application/json',
+          data: JSON.stringify(request),
+          processData: false,
+          success: function(data){
+            $("#sec-remaining").css("display", "block");
+            i++;
+
+            output = data;
+            console.log(data);
+
+            // face not found
+            if (typeof(data.responses[0].faceAnnotations) == 'undefined') {
+              return;
+            }
+
+            takeSnapshot();
+
+            var faceData = data.responses[0].faceAnnotations[0];
+
+            var confidence = faceData.detectionConfidence;
+
+            var joyVal = confidence * likelihoodToNum(faceData.joyLikelihood);
+            var sorrowVal = confidence * likelihoodToNum(faceData.sorrowLikelihood);
+            var angerVal = confidence * likelihoodToNum(faceData.angerLikelihood);
+            var surpriseVal =  confidence * likelihoodToNum(faceData.surpriseLikelihood);
+
+            console.log("joy: " + joyVal + ", sorrow: " + sorrowVal + "anger: " + angerVal + ", surprise: " + surpriseVal);
+
+            copyImageFromVideo(faceData);
+            addDataToChart(
+                confidence * likelihoodToNum(faceData.joyLikelihood),
+                confidence * likelihoodToNum(faceData.sorrowLikelihood),
+                confidence * likelihoodToNum(faceData.angerLikelihood),
+                confidence * likelihoodToNum(faceData.surpriseLikelihood)
+            );
+          },
+          error: function (data, textStatus, errorThrown) {
+            i++;
+            console.log('error: ' + data);
+          }
+        })
+      })
+    }
+
+    function copyImageFromVideo(faceData) {
+      var vertices = faceData.boundingPoly.vertices;
+
+      var boundingPolyWidth = vertices[1].x - vertices[0].x;
+      var boundingPolyHeight = vertices[2].y - vertices[0].y;
+
+      var captureImage = captureCanvas.getImageData(vertices[0].x, vertices[0].y, boundingPolyWidth, boundingPolyHeight);
+
+      snapshotPhotoCanvas.clearRect(0, 0, w, h);
+      snapshotPhotoCanvas.putImageData(captureImage, 0, 0);
+    }
+
+    function takeSnapshot() {
+      // don't copy the first image which is nothing because the page just loaded
+      if (i <= 1) {
+        return;
+      }
+
+      $('#snapshot-table tr:first').after(
+          '<tr>' +
+          '<td><canvas id="snapshot-chart-' + i + '" width="531" height="200"></canvas></td>' +
+          '<td><canvas id="snapshot-photo-' + i + '" width="640" height="480" style="width: 269px; height:200px"></canvas></td>' +
+          '</tr>'
+      );
+
+      var snapshotPhotoSourceCanvas = document.getElementById("snapshot-photo").getContext('2d');
+      var snapshotPhotoImage = snapshotPhotoSourceCanvas.getImageData(0, 0, w, h);
+      var snapshotPhotoDestinationCanvas = document.getElementById("snapshot-photo-" + i).getContext('2d');
+      snapshotPhotoDestinationCanvas.putImageData(snapshotPhotoImage, 0, 0);
+
+      var snapshotChartCanvas = document.getElementById("snapshot-chart").getContext('2d');
+      var snapshotChartImage = snapshotChartCanvas.getImageData(0, 0, 800, 200);
+      var destinationSnapshotChartCanvas = document.getElementById("snapshot-chart-" + i).getContext('2d');
+      destinationSnapshotChartCanvas.putImageData(snapshotChartImage, 0, 0)
+    }
+
+    function draw() {
+      // whatever you draw here will be uploaded to google when you call upload()
+      image(capture, 0, 0, w, h);
+    }
+
+    function mousePressed() {
+      var timeLeft = timeUnitsToRun - i;
+
+      if (timeLeft >= 0) {
+        upload();
+        $("#sec-remaining").html(timeLeft + "s");
+      } else {
+        $("#sec-remaining").html("0s");
+      }
+    }
+
+    function likelihoodToNum(likelihood) {
+      var likelihoodToNum = {
+        'UNKNOWN': 0.0,
+        'VERY_UNLIKELY': 0.1,
+        'UNLIKELY': 0.25,
+        'POSSIBLE': 0.5,
+        'LIKELY': 0.75,
+        'VERY_LIKELY': 1.0
+      };
+
+      return likelihoodToNum[likelihood];
+    }
+  </script>
+
+  <style> body {padding: 0; margin: 0;} canvas {vertical-align: top;} </style>
+</head>
+<body>
+  <div id="sec-remaining" style="display:none">30s</div>
+  <img src="iphone.png" height="800px" style="position: absolute; top: 0px; left: 1600px;">
+
+  <div id="result" style="position: absolute; top: 20px; left: 700px; width: 800px">
+    <canvas id="time-chart" width="800" height="400"></canvas>
+    <br><br>
+    <table id="snapshot-table">
+      <tr>
+        <td>
+          <canvas id="snapshot-chart" width="531" height="200"></canvas>
+        </td>
+        <td>
+          <canvas id="snapshot-photo" width="640" height="480" style="width: 269px; height:200px"></canvas>
+        </td>
+      </tr>
+    </table>
+  </div>
+</body>
+</html>
